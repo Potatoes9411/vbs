@@ -274,7 +274,7 @@ exit /b
 
 :title
 
-title VBS 1.7
+title VBS 1.7.1
 %psc% "&{$W=$Host.UI.RawUI.WindowSize;$B=$Host.UI.RawUI.BufferSize;$W.Height=32;$B.Height=300;$Host.UI.RawUI.WindowSize=$W;$Host.UI.RawUI.BufferSize=$B;}" >nul 2>&1
 
 cls
@@ -334,6 +334,7 @@ if !_wmic! EQU 1 (
 if !_wmic! EQU 0 (
     for /f %%A in ('%psc% "Get-WmiObject -Class Win32_ComputerSystem | Select-Object -Property CreationClassName" 2^>nul ^| find /i "computersystem"') do set "wmicheck=1"
 )
+
 if not defined wmicheck set "wmifailed=1"
 if defined wmifailed (
     echo.
@@ -616,22 +617,13 @@ if defined dgquery (
 
     set "winhello="
     set "whcredential="
+    set "whcount="
     for /f "tokens=3" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\WindowsHello" /v Enabled 2^>nul') do if "%%A"=="0x1" set "winhello=1"
     if defined winhello (
-        (
-        echo dir /b "%windir%\ServiceProfiles\LocalService\AppData\Local\Microsoft\Ngc" ^> "%windir%\Temp\NgcCheck.txt"
-        )>%windir%\Temp\NgcCheck.cmd
-        SCHTASKS /Create /F /RU "SYSTEM" /RL HIGHEST /SC HOURLY /TN NgcCheck /TR "cmd /c %windir%\Temp\NgcCheck.cmd" >nul 2>&1
-        SCHTASKS /Run /I /TN NgcCheck >nul 2>&1
-        TIMEOUT /T 3 >nul
-        SCHTASKS /Delete /F /TN NgcCheck >nul 2>&1
-        set "whcount=0"
-        for /f %%A in ('type "%windir%\Temp\NgcCheck.txt" 2^>nul ^| findstr /v /i "PregenPool"') do (
+        for /f %%A in ('reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\NgcPin\Credentials" 2^>nul ^| findstr /i "S-1-5-"') do (
             set "whcredential=1"
-            set /a whcount+=1
+            set /a "whcount+=1"
         )
-        del /f /q "%windir%\Temp\NgcCheck.txt" >nul 2>&1
-        del /f /q "%windir%\Temp\NgcCheck.cmd" >nul 2>&1
     )
     if defined winhello if defined whcredential (
         echo.
@@ -641,8 +633,8 @@ if defined dgquery (
         echo %cRedHL%If the option to disable Windows Hello is greyed out, go to Settings ^> Accounts ^> Your info,%cReset%
         echo %cRedHL%select "Sign in with a local account", then try again.%cReset%
         if !whcount! GTR 1 (
-            echo.
-            echo %cGreyHL%Multiple Windows Hello credentials detected. Make sure Windows Hello is disabled for all users on your PC.%cReset%
+        echo.
+        echo %cGreyHL%Windows Hello detected on multiple user accounts. Make sure Windows Hello is disabled for all users on your PC.%cReset%
         )
         echo.
         echo %cYellow%Press any key to exit...%cReset%
@@ -1075,7 +1067,7 @@ if not defined anythingdisabled (
 if not "!dse!"=="1" (
     call :dk_bitlocker
     if "!blprotected!"=="1" (
-        manage-bde -protectors -disable %SystemDrive% -rebootcount 1 >nul 2>&1
+        %psc% "(Get-WmiObject -Namespace root\CIMV2\Security\MicrosoftVolumeEncryption -Class Win32_EncryptableVolume | where {$_.DriveLetter -eq $env:SystemDrive}).DisableKeyProtectors(1)" >nul 2>&1
         if "!errorlevel!"=="0" (
             echo(________________________________________________________________________
             echo.
@@ -1565,9 +1557,16 @@ exit /b
 
 :dk_bitlocker
 
-set "blprotected=0"
-for /f "delims=" %%s in ('%psc% "(Get-BitLockerVolume -MountPoint $env:SystemDrive).ProtectionStatus" 2^>nul') do (
-    if "%%s"=="On" set "blprotected=1"
+set "blprotected="
+set "blwmifailed="
+%psc% "try{exit (Get-CimInstance -Namespace root\CIMV2\Security\MicrosoftVolumeEncryption -Class Win32_EncryptableVolume -ErrorAction Stop | where {$_.DriveLetter -eq $env:SystemDrive}).ProtectionStatus}catch{exit 2}" >nul 2>&1
+if !errorlevel! EQU 1 (set "blprotected=1") else if !errorlevel! NEQ 0 set "blwmifailed=1"
+if defined blwmifailed (
+echo(________________________________________________________________________
+echo.
+echo %cBlueHL%The script was unable to detect the BitLocker status.%cReset%
+echo.
+echo %cBlueHL%If BitLocker is enabled, suspend protection before rebooting.%cReset%
 )
 exit /b
 
